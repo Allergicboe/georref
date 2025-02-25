@@ -321,7 +321,7 @@ def format_dms(value):
 
 # --- 6. Actualizar el contenido de la columna DMS ---
 def update_dms_format_column_sonda(sheet):
-    """Actualiza la columna DMS en la hoja de cálculo para Sondas."""
+    """Actualiza la columna DMS en la hoja de cálculo para Sondas usando batch_update."""
     try:
         dms_values = sheet.col_values(13)  # Columna M
         if len(dms_values) <= 1:
@@ -329,33 +329,23 @@ def update_dms_format_column_sonda(sheet):
             return
         
         start_row = 2
-        end_row = len(dms_values)
-        cell_range = f"M{start_row}:M{end_row}"
-        cells = sheet.range(cell_range)
+        batch_updates = []
         
-        # Procesar en lotes para evitar problemas con grandes volúmenes de datos
-        BATCH_SIZE = 100
-        num_batches = (len(cells) + BATCH_SIZE - 1) // BATCH_SIZE
+        for i in range(start_row - 1, len(dms_values)):
+            original_value = dms_values[i] if i < len(dms_values) else ""
+            if original_value:
+                new_val = format_dms(original_value)
+                if new_val is not None:
+                    batch_updates.append({"range": f"M{i+1}", "values": [[new_val]]})
         
-        for batch_idx in range(num_batches):
-            start_idx = batch_idx * BATCH_SIZE
-            end_idx = min((batch_idx + 1) * BATCH_SIZE, len(cells))
-            batch_cells = cells[start_idx:end_idx]
-            
-            for i, cell in enumerate(batch_cells):
-                idx = start_idx + i + 1  # +1 para omitir el encabezado
-                if idx < len(dms_values):
-                    original_value = dms_values[idx]
-                    if original_value:
-                        new_val = format_dms(original_value)
-                        cell.value = new_val if new_val is not None else original_value
-            
-            sheet.update_cells(batch_cells)
+        if batch_updates:
+            sheet.batch_update(batch_updates)
+    
     except Exception as e:
         st.warning(f"Error al actualizar formato DMS para sondas: {str(e)}")
 
 def update_dms_format_column_campo(sheet):
-    """Actualiza la columna DMS en la hoja de cálculo para Campo."""
+    """Actualiza la columna DMS en la hoja de cálculo para Campo usando batch_update."""
     try:
         dms_values = sheet.col_values(5)  # Columna E
         if len(dms_values) <= 1:
@@ -363,28 +353,18 @@ def update_dms_format_column_campo(sheet):
             return
         
         start_row = 2
-        end_row = len(dms_values)
-        cell_range = f"E{start_row}:E{end_row}"
-        cells = sheet.range(cell_range)
-        
-        # Procesar en lotes
-        BATCH_SIZE = 100
-        num_batches = (len(cells) + BATCH_SIZE - 1) // BATCH_SIZE
-        
-        for batch_idx in range(num_batches):
-            start_idx = batch_idx * BATCH_SIZE
-            end_idx = min((batch_idx + 1) * BATCH_SIZE, len(cells))
-            batch_cells = cells[start_idx:end_idx]
-            
-            for i, cell in enumerate(batch_cells):
-                idx = start_idx + i + 1  # +1 para omitir el encabezado
-                if idx < len(dms_values):
-                    original_value = dms_values[idx]
-                    if original_value:
-                        new_val = format_dms(original_value)
-                        cell.value = new_val if new_val is not None else original_value
-            
-            sheet.update_cells(batch_cells)
+        batch_updates = []
+
+        for i in range(start_row - 1, len(dms_values)):
+            original_value = dms_values[i] if i < len(dms_values) else ""
+            if original_value:
+                new_val = format_dms(original_value)
+                if new_val is not None:
+                    batch_updates.append({"range": f"E{i+1}", "values": [[new_val]]})
+
+        if batch_updates:
+            sheet.batch_update(batch_updates)
+
     except Exception as e:
         st.warning(f"Error al actualizar formato DMS para campo: {str(e)}")
 
@@ -436,78 +416,60 @@ def decimal_to_dms(lat, lon):
 
 # --- 8. Funciones que actualizan la hoja de cálculo para la conversión de coordenadas ---
 def update_decimal_from_dms_sonda(sheet):
-    """Convierte DMS a decimal y actualiza las columnas correspondientes para Sondas."""
+    """Convierte DMS a decimal y actualiza las columnas correspondientes para Sondas usando batch_update."""
     try:
-        st.info("⌛ Iniciando la conversión de coordenadas de DMS a decimal para Sondas. Por favor espere...")
-        apply_format_sonda(sheet)
-        update_dms_format_column_sonda(sheet)
         dms_values = sheet.col_values(13)  # Columna M
         if len(dms_values) <= 1:
             st.warning("No se encontraron datos en 'Ubicación sonda google maps'.")
             return
         
-        num_rows = len(dms_values)
-        lat_cells = sheet.range(f"N2:N{num_rows}")
-        lon_cells = sheet.range(f"O2:O{num_rows}")
-        
-        # Procesar en lotes
-        BATCH_SIZE = 100
-        for i in range(1, num_rows, BATCH_SIZE):
-            end_idx = min(i + BATCH_SIZE, num_rows)
-            for j in range(i, end_idx):
-                idx = j - 1  # Ajustar índice para las celdas
-                dms = dms_values[j] if j < len(dms_values) else ""
-                if dms:
-                    result = dms_to_decimal(dms)
-                    if result is not None:
-                        lat, lon = result
-                        lat_cells[idx].value = round(lat, 8)
-                        lon_cells[idx].value = round(lon, 8)
-        
-            # Actualizar en lotes
-            sheet.update_cells(lat_cells[i-1:end_idx-1])
-            sheet.update_cells(lon_cells[i-1:end_idx-1])
-            
-            # Mostrar progreso
-            progress = min(end_idx / num_rows, 1.0)
-            st.progress(progress)
-        
-        st.success("✅ Conversión de DMS a decimal completada.")
+        start_row = 2
+        batch_updates = []
+
+        for i in range(start_row - 1, len(dms_values)):
+            dms = dms_values[i] if i < len(dms_values) else ""
+            if dms:
+                result = dms_to_decimal(dms)
+                if result is not None:
+                    lat, lon = result
+                    batch_updates.append({"range": f"N{i+1}:O{i+1}", "values": [[lat, lon]]})
+
+        if batch_updates:
+            sheet.batch_update(batch_updates)
+
     except Exception as e:
-        st.error(f"Error en la conversión de DMS a decimal: {str(e)}")
+        st.error(f"Error en la conversión de DMS a decimal para sondas: {str(e)}")
 
 def update_dms_from_decimal_sonda(sheet):
-    """Convierte decimal a DMS y actualiza la columna correspondiente para Sondas."""
+    """Convierte decimal a DMS y actualiza la columna M para Sondas usando batch_update."""
     try:
-        st.info("⌛ Iniciando la conversión de coordenadas de decimal a DMS para Sondas. Por favor espere...")
-        apply_format_sonda(sheet)
-        
         lat_values = sheet.col_values(14)  # Columna N
         lon_values = sheet.col_values(15)  # Columna O
         if len(lat_values) <= 1 or len(lon_values) <= 1:
-            st.warning("No se encontraron datos en 'Latitud sonda' o 'longitud Sonda'.")
+            st.warning("No se encontraron datos en 'Latitud sonda' o 'Longitud Sonda'.")
             return
         
-        num_rows = min(len(lat_values), len(lon_values))
-        dms_cells = sheet.range(f"M2:M{num_rows}")
-        
-        # Procesar en lotes
-        BATCH_SIZE = 100
-        for i in range(1, num_rows, BATCH_SIZE):
-            end_idx = min(i + BATCH_SIZE, num_rows)
-            for j in range(i, end_idx):
-                idx = j - 1  # Ajustar índice para las celdas
-                lat_str = lat_values[j] if j < len(lat_values) else ""
-                lon_str = lon_values[j] if j < len(lon_values) else ""
-                if lat_str and lon_str:
-                    try:
-                        lat = float(str(lat_str).replace(",", "."))
-                        lon = float(str(lon_str).replace(",", "."))
-                        dms = decimal_to_dms(lat, lon)
-                        if dms:
-                            dms_cells[idx].value = dms
-                    except (ValueError, TypeError):
-                        pass
+        start_row = 2
+        batch_updates = []
+
+        for i in range(start_row - 1, min(len(lat_values), len(lon_values))):
+            lat_str = lat_values[i] if i < len(lat_values) else ""
+            lon_str = lon_values[i] if i < len(lon_values) else ""
+            if lat_str and lon_str:
+                try:
+                    lat = float(str(lat_str).replace(",", "."))
+                    lon = float(str(lon_str).replace(",", "."))
+                    dms = decimal_to_dms(lat, lon)
+                    if dms:
+                        batch_updates.append({"range": f"M{i+1}", "values": [[dms]]})
+                except (ValueError, TypeError):
+                    pass
+
+        if batch_updates:
+            sheet.batch_update(batch_updates)
+
+    except Exception as e:
+        st.error(f"Error en la conversión de decimal a DMS para sondas: {str(e)}")
         
             # Actualizar en lotes
             sheet.update_cells(dms_cells[i-1:end_idx-1])
@@ -521,89 +483,60 @@ def update_dms_from_decimal_sonda(sheet):
         st.error(f"Error en la conversión de decimal a DMS: {str(e)}")
 
 def update_decimal_from_dms_campo(sheet):
-    """Convierte DMS a decimal y actualiza las columnas correspondientes para Campo."""
+    """Convierte DMS a decimal y actualiza las columnas correspondientes para Campo usando batch_update."""
     try:
-        st.info("⌛ Iniciando la conversión de coordenadas de DMS a decimal para Campo. Por favor espere...")
-        apply_format_campo(sheet)
-        update_dms_format_column_campo(sheet)
         dms_values = sheet.col_values(5)  # Columna E
         if len(dms_values) <= 1:
             st.warning("No se encontraron datos en 'Ubicación campo'.")
             return
         
-        num_rows = len(dms_values)
-        lat_cells = sheet.range(f"F2:F{num_rows}")
-        lon_cells = sheet.range(f"G2:G{num_rows}")
-        
-        # Procesar en lotes
-        BATCH_SIZE = 100
-        for i in range(1, num_rows, BATCH_SIZE):
-            end_idx = min(i + BATCH_SIZE, num_rows)
-            for j in range(i, end_idx):
-                idx = j - 1  # Ajustar índice para las celdas
-                dms = dms_values[j] if j < len(dms_values) else ""
-                if dms:
-                    result = dms_to_decimal(dms)
-                    if result is not None:
-                        lat, lon = result
-                        lat_cells[idx].value = round(lat, 8)
-                        lon_cells[idx].value = round(lon, 8)
-        
-            # Actualizar en lotes
-            sheet.update_cells(lat_cells[i-1:end_idx-1])
-            sheet.update_cells(lon_cells[i-1:end_idx-1])
-            
-            # Mostrar progreso
-            progress = min(end_idx / num_rows, 1.0)
-            st.progress(progress)
-        
-        st.success("✅ Conversión de DMS a decimal completada.")
+        start_row = 2
+        batch_updates = []
+
+        for i in range(start_row - 1, len(dms_values)):
+            dms = dms_values[i] if i < len(dms_values) else ""
+            if dms:
+                result = dms_to_decimal(dms)
+                if result is not None:
+                    lat, lon = result
+                    batch_updates.append({"range": f"F{i+1}:G{i+1}", "values": [[lat, lon]]})
+
+        if batch_updates:
+            sheet.batch_update(batch_updates)
+
     except Exception as e:
-        st.error(f"Error en la conversión de DMS a decimal: {str(e)}")
+        st.error(f"Error en la conversión de DMS a decimal para campo: {str(e)}")
 
 def update_dms_from_decimal_campo(sheet):
-    """Convierte decimal a DMS y actualiza la columna correspondiente para Campo."""
+    """Convierte decimal a DMS y actualiza la columna E para Campo usando batch_update."""
     try:
-        st.info("⌛ Iniciando la conversión de coordenadas de decimal a DMS para Campo. Por favor espere...")
-        apply_format_campo(sheet)
-        
         lat_values = sheet.col_values(6)  # Columna F
         lon_values = sheet.col_values(7)  # Columna G
         if len(lat_values) <= 1 or len(lon_values) <= 1:
             st.warning("No se encontraron datos en 'Latitud campo' o 'Longitud Campo'.")
             return
         
-        num_rows = min(len(lat_values), len(lon_values))
-        dms_cells = sheet.range(f"E2:E{num_rows}")
-        
-        # Procesar en lotes
-        BATCH_SIZE = 100
-        for i in range(1, num_rows, BATCH_SIZE):
-            end_idx = min(i + BATCH_SIZE, num_rows)
-            for j in range(i, end_idx):
-                idx = j - 1  # Ajustar índice para las celdas
-                lat_str = lat_values[j] if j < len(lat_values) else ""
-                lon_str = lon_values[j] if j < len(lon_values) else ""
-                if lat_str and lon_str:
-                    try:
-                        lat = float(str(lat_str).replace(",", "."))
-                        lon = float(str(lon_str).replace(",", "."))
-                        dms = decimal_to_dms(lat, lon)
-                        if dms:
-                            dms_cells[idx].value = dms
-                    except (ValueError, TypeError):
-                        pass
-        
-            # Actualizar en lotes
-            sheet.update_cells(dms_cells[i-1:end_idx-1])
-            
-            # Mostrar progreso
-            progress = min(end_idx / num_rows, 1.0)
-            st.progress(progress)
-        
-        st.success("✅ Conversión de decimal a DMS completada.")
+        start_row = 2
+        batch_updates = []
+
+        for i in range(start_row - 1, min(len(lat_values), len(lon_values))):
+            lat_str = lat_values[i] if i < len(lat_values) else ""
+            lon_str = lon_values[i] if i < len(lon_values) else ""
+            if lat_str and lon_str:
+                try:
+                    lat = float(str(lat_str).replace(",", "."))
+                    lon = float(str(lon_str).replace(",", "."))
+                    dms = decimal_to_dms(lat, lon)
+                    if dms:
+                        batch_updates.append({"range": f"E{i+1}", "values": [[dms]]})
+                except (ValueError, TypeError):
+                    pass
+
+        if batch_updates:
+            sheet.batch_update(batch_updates)
+
     except Exception as e:
-        st.error(f"Error en la conversión de decimal a DMS: {str(e)}")
+        st.error(f"Error en la conversión de decimal a DMS para campo: {str(e)}")
 
 # --- 9. Interfaz de usuario en Streamlit ---
 def main():
