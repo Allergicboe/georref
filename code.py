@@ -425,7 +425,7 @@ def decimal_to_dms(lat, lon):
         return None
 
 # --- 8. Funciones que actualizan la hoja de cálculo para la conversión de coordenadas ---
-ddef update_decimal_from_dms_sonda(sheet):
+def update_decimal_from_dms_sonda(sheet):
     """Convierte DMS a decimal y actualiza las columnas N y O con una barra de progreso."""
     try:
         dms_values = sheet.col_values(13)  # Columna M
