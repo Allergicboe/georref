@@ -289,7 +289,7 @@ def update_dms_format_column_campo(sheet):
 # --- 7. Funciones de conversión ---
 def dms_to_decimal(dms_str):
     """Convierte DMS a decimal."""
-    pattern = r'(\d{2})[°º](\d{2})[\''](\d{1,2}\.\d)"([NS])\s+(\d{2})[°º](\d{2})[\''](\d{1,2}\.\d)"([EW])'
+    pattern = r'(\d{2})[°º](\d{2})[\']((\d{1,2}\.\d)"([NS])\s+(\d{2})[°º](\d{2})[\']((\d{1,2}\.\d)"([EW])'
     m = re.match(pattern, dms_str.strip())
     if m:
         lat_deg, lat_min, lat_sec, lat_dir, lon_deg, lon_min, lon_sec, lon_dir = m.groups()
