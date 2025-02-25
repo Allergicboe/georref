@@ -522,16 +522,18 @@ def update_decimal_from_dms_campo(sheet):
         st.error(f"Error en la conversión de DMS a decimal para campo: {str(e)}")
 
 def update_dms_from_decimal_campo(sheet):
-    """Convierte decimal a DMS y actualiza la columna E para Campo usando batch_update."""
+    """Convierte decimal a DMS y actualiza la columna E para Campo con batch_update y barra de progreso."""
     try:
         lat_values = sheet.col_values(6)  # Columna F
         lon_values = sheet.col_values(7)  # Columna G
         if len(lat_values) <= 1 or len(lon_values) <= 1:
             st.warning("No se encontraron datos en 'Latitud campo' o 'Longitud Campo'.")
             return
-        
+
         start_row = 2
         batch_updates = []
+        total_rows = min(len(lat_values), len(lon_values)) - (start_row - 1)
+        progress_bar = st.progress(0)
 
         for i in range(start_row - 1, min(len(lat_values), len(lon_values))):
             lat_str = lat_values[i] if i < len(lat_values) else ""
@@ -546,8 +548,11 @@ def update_dms_from_decimal_campo(sheet):
                 except (ValueError, TypeError):
                     pass
 
+            progress_bar.progress((i - (start_row - 1) + 1) / total_rows)
+
         if batch_updates:
             sheet.batch_update(batch_updates)
+            st.success("✅ Conversión de decimal a DMS completada.")
 
     except Exception as e:
         st.error(f"Error en la conversión de decimal a DMS para campo: {str(e)}")
