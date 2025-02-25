@@ -301,7 +301,7 @@ def format_dms(value):
     if not value or not isinstance(value, str):
         return None
     
-    pattern = r'(\d+)[°º]\s*(\d+)[\'']\s*([\d\.]+)"\s*([NS])\s+(\d+)[°º]\s*(\d+)[\'']\s*([\d\.]+)"\s*([EW])'
+    pattern = r'(\d+)[°º]\s*(\d+)[\']\s*([\d\.]+)"\s*([NS])\s+(\d+)[°º]\s*(\d+)[\']\s*([\d\.]+)"\s*([EW])'
     m = re.match(pattern, value.strip())
     if m:
         lat_deg, lat_min, lat_sec, lat_dir, lon_deg, lon_min, lon_sec, lon_dir = m.groups()
@@ -394,7 +394,7 @@ def dms_to_decimal(dms_str):
     if not dms_str or not isinstance(dms_str, str):
         return None
     
-    pattern = r'(\d{1,2})[°º](\d{1,2})[\''](\d{1,2}(?:\.\d+)?)"([NS])\s+(\d{1,3})[°º](\d{1,2})[\''](\d{1,2}(?:\.\d+)?)"([EW])'
+    pattern = r'(\d{1,2})[°º](\d{1,2})[\'](\d{1,2}(?:\.\d+)?)"([NS])\s+(\d{1,3})[°º](\d{1,2})[\'](\d{1,2}(?:\.\d+)?)"([EW])'
     m = re.match(pattern, dms_str.strip())
     if m:
         lat_deg, lat_min, lat_sec, lat_dir, lon_deg, lon_min, lon_sec, lon_dir = m.groups()
