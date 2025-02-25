@@ -14,7 +14,7 @@ import glob
 
 # Configuración de la página
 st.set_page_config(
-    page_title="Herramientas de Geolocalización",
+    page_title="Georreferenciación",
     page_icon="🌍",
     layout="wide"
 )
