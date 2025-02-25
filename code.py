@@ -470,17 +470,6 @@ def update_dms_from_decimal_sonda(sheet):
 
     except Exception as e:
         st.error(f"Error en la conversión de decimal a DMS para sondas: {str(e)}")
-        
-            # Actualizar en lotes
-            sheet.update_cells(dms_cells[i-1:end_idx-1])
-            
-            # Mostrar progreso
-            progress = min(end_idx / num_rows, 1.0)
-            st.progress(progress)
-        
-        st.success("✅ Conversión de decimal a DMS completada.")
-    except Exception as e:
-        st.error(f"Error en la conversión de decimal a DMS: {str(e)}")
 
 def update_decimal_from_dms_campo(sheet):
     """Convierte DMS a decimal y actualiza las columnas correspondientes para Campo usando batch_update."""
