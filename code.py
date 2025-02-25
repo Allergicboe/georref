@@ -10,6 +10,7 @@ import gspread
 from google.oauth2 import service_account
 from concurrent.futures import ThreadPoolExecutor
 import re
+import glob
 
 # Configuración de la página
 st.set_page_config(
@@ -48,17 +49,49 @@ def download_shapefiles():
     download_folder = os.path.join(os.getcwd(), "shapefile_downloaded")
     os.makedirs(download_folder, exist_ok=True)
     
+    # Verificar si archivos ya existen y eliminarlos para evitar problemas
+    for filename in os.listdir(download_folder):
+        if filename.startswith("combined."):
+            os.remove(os.path.join(download_folder, filename))
+    
+    # Descargar los archivos
     for filename, url in file_urls.items():
         destination = os.path.join(download_folder, filename)
-        if not os.path.exists(destination):
-            gdown.download(url, destination, quiet=True)
+        try:
+            gdown.download(url, destination, quiet=False)
+            # Verificar que el archivo se descargó correctamente
+            if not os.path.exists(destination) or os.path.getsize(destination) == 0:
+                raise Exception(f"Error descargando {filename}")
+        except Exception as e:
+            st.error(f"Error al descargar {filename}: {str(e)}")
+            raise e
     
     return download_folder
 
 @st.cache_resource
 def load_shapefile(shapefile_path):
     """Carga el archivo shape"""
-    return gpd.read_file(shapefile_path)
+    try:
+        # Verificar que el archivo existe
+        if not os.path.exists(shapefile_path):
+            files = glob.glob(os.path.join(os.path.dirname(shapefile_path), "*"))
+            st.error(f"El archivo {shapefile_path} no existe. Archivos disponibles: {files}")
+            raise FileNotFoundError(f"El archivo {shapefile_path} no existe")
+        
+        # Verificar que todos los archivos necesarios existen
+        base_path = os.path.splitext(shapefile_path)[0]
+        required_extensions = ['.shp', '.dbf', '.prj', '.shx']
+        for ext in required_extensions:
+            file_path = f"{base_path}{ext}"
+            if not os.path.exists(file_path):
+                st.error(f"Archivo requerido {file_path} no encontrado")
+                raise FileNotFoundError(f"Archivo requerido {file_path} no encontrado")
+        
+        # Cargar el archivo shapefile
+        return gpd.read_file(shapefile_path)
+    except Exception as e:
+        st.error(f"Error al cargar el shapefile: {str(e)}")
+        raise e
 
 def vectorized_parse_coordinates(series):
     """Procesa las coordenadas de forma vectorizada"""
@@ -95,58 +128,79 @@ def load_sheet(client):
 # --- 3. Funciones para Georreferenciación ---
 def process_data(data, gdf):
     """Procesa los datos y realiza la georreferenciación"""
-    # Procesar coordenadas
-    data['lat'] = vectorized_parse_coordinates(data['Latitud campo'])
-    data['lon'] = vectorized_parse_coordinates(data['Longitud Campo'])
-    
-    # Identificar coordenadas inválidas
-    invalid_mask = data['lat'].isna() | data['lon'].isna() | \
-                  np.isinf(data['lat']) | np.isinf(data['lon'])
-    valid_data = data[~invalid_mask].copy()
-    
-    # Crear array de centroides
-    centroids = np.array([[geom.centroid.x, geom.centroid.y] for geom in gdf.geometry])
-    tree = cKDTree(centroids)
-    
-    # Crear array de puntos válidos
-    points = np.column_stack([valid_data['lon'].values, valid_data['lat'].values])
-    
-    # Encontrar el polígono más cercano
-    distances, indices = tree.query(points, k=1)
-    
-    # Determinar puntos fuera del territorio
-    DISTANCE_THRESHOLD = 1
-    outside_mask = distances > DISTANCE_THRESHOLD
-    
-    # Crear DataFrame con resultados
-    results = pd.DataFrame({
-        'Region': gdf.iloc[indices]['Region'].values,
-        'Provincia': gdf.iloc[indices]['Provincia'].values,
-        'Comuna': gdf.iloc[indices]['Comuna'].values,
-        'original_index': valid_data.index + 2
-    })
-    
-    # Marcar puntos fuera como "OTROS"
-    results.loc[outside_mask, ['Region', 'Provincia', 'Comuna']] = "OTROS"
-    
-    # Agregar filas con coordenadas inválidas
-    na_results = pd.DataFrame({
-        'Region': "NA",
-        'Provincia': "NA",
-        'Comuna': "NA",
-        'original_index': data[invalid_mask].index + 2
-    })
-    
-    final_results = pd.concat([results, na_results], ignore_index=True)
-    return final_results, len(valid_data), len(data[invalid_mask])
+    try:
+        # Verificar que existen las columnas necesarias
+        required_columns = ['Latitud campo', 'Longitud Campo']
+        for col in required_columns:
+            if col not in data.columns:
+                st.error(f"Columna requerida '{col}' no encontrada en los datos")
+                raise ValueError(f"Columna requerida '{col}' no encontrada en los datos")
+        
+        # Procesar coordenadas
+        data['lat'] = vectorized_parse_coordinates(data['Latitud campo'])
+        data['lon'] = vectorized_parse_coordinates(data['Longitud Campo'])
+        
+        # Identificar coordenadas inválidas
+        invalid_mask = data['lat'].isna() | data['lon'].isna() | \
+                    np.isinf(data['lat']) | np.isinf(data['lon'])
+        valid_data = data[~invalid_mask].copy()
+        
+        # Si no hay datos válidos, retornar resultados vacíos
+        if len(valid_data) == 0:
+            st.warning("No se encontraron coordenadas válidas para procesar")
+            empty_results = pd.DataFrame(columns=['Region', 'Provincia', 'Comuna', 'original_index'])
+            return empty_results, 0, len(data)
+        
+        # Crear array de centroides
+        centroids = np.array([[geom.centroid.x, geom.centroid.y] for geom in gdf.geometry])
+        tree = cKDTree(centroids)
+        
+        # Crear array de puntos válidos
+        points = np.column_stack([valid_data['lon'].values, valid_data['lat'].values])
+        
+        # Encontrar el polígono más cercano
+        distances, indices = tree.query(points, k=1)
+        
+        # Determinar puntos fuera del territorio
+        DISTANCE_THRESHOLD = 1
+        outside_mask = distances > DISTANCE_THRESHOLD
+        
+        # Crear DataFrame con resultados
+        results = pd.DataFrame({
+            'Region': gdf.iloc[indices]['Region'].values,
+            'Provincia': gdf.iloc[indices]['Provincia'].values,
+            'Comuna': gdf.iloc[indices]['Comuna'].values,
+            'original_index': valid_data.index + 2
+        })
+        
+        # Marcar puntos fuera como "OTROS"
+        results.loc[outside_mask, ['Region', 'Provincia', 'Comuna']] = "OTROS"
+        
+        # Agregar filas con coordenadas inválidas
+        na_results = pd.DataFrame({
+            'Region': "NA",
+            'Provincia': "NA",
+            'Comuna': "NA",
+            'original_index': data[invalid_mask].index + 2
+        })
+        
+        final_results = pd.concat([results, na_results], ignore_index=True)
+        return final_results, len(valid_data), len(data[invalid_mask])
+    except Exception as e:
+        st.error(f"Error al procesar datos: {str(e)}")
+        raise e
 
 def update_google_sheets_georreferencia(client, final_results):
     """Actualiza Google Sheets con los resultados de georreferenciación"""
     try:
         sheet = load_sheet(client)
         
+        if len(final_results) == 0:
+            st.warning("No hay resultados para actualizar en Google Sheets")
+            return True
+        
         # Preparar actualizaciones en lotes
-        BATCH_SIZE = 1000
+        BATCH_SIZE = 100  # Reducido para evitar sobrecarga
         updates = []
         current_batch = []
         
@@ -163,10 +217,13 @@ def update_google_sheets_georreferencia(client, final_results):
         if current_batch:
             updates.append(current_batch)
         
-        # Actualizar en paralelo
-        with ThreadPoolExecutor(max_workers=4) as executor:
-            for batch in updates:
-                sheet.batch_update(batch)
+        # Actualizar en lotes
+        total_batches = len(updates)
+        progress_bar = st.progress(0)
+        
+        for i, batch in enumerate(updates):
+            sheet.batch_update(batch)
+            progress_bar.progress((i + 1) / total_batches)
         
         return True
     except Exception as e:
@@ -176,66 +233,75 @@ def update_google_sheets_georreferencia(client, final_results):
 # --- 4. Funciones para aplicar formato a las celdas ---
 def apply_format_sonda(sheet):
     """Aplica formato a las celdas de la hoja de cálculo para Sondas."""
-    text_format = {
-        "backgroundColor": {"red": 1, "green": 1, "blue": 1},
-        "horizontalAlignment": "CENTER",
-        "textFormat": {
-            "foregroundColor": {"red": 0, "green": 0, "blue": 0},
-            "fontFamily": "Arial",
-            "fontSize": 11
+    try:
+        text_format = {
+            "backgroundColor": {"red": 1, "green": 1, "blue": 1},
+            "horizontalAlignment": "CENTER",
+            "textFormat": {
+                "foregroundColor": {"red": 0, "green": 0, "blue": 0},
+                "fontFamily": "Arial",
+                "fontSize": 11
+            }
         }
-    }
-    number_format = {
-        "numberFormat": {
-            "type": "NUMBER",
-            "pattern": "#,##0.00000000"
-        },
-        "backgroundColor": {"red": 1, "green": 1, "blue": 1},
-        "horizontalAlignment": "CENTER",
-        "textFormat": {
-            "foregroundColor": {"red": 0, "green": 0, "blue": 0},
-            "fontFamily": "Arial",
-            "fontSize": 11
+        number_format = {
+            "numberFormat": {
+                "type": "NUMBER",
+                "pattern": "#,##0.00000000"
+            },
+            "backgroundColor": {"red": 1, "green": 1, "blue": 1},
+            "horizontalAlignment": "CENTER",
+            "textFormat": {
+                "foregroundColor": {"red": 0, "green": 0, "blue": 0},
+                "fontFamily": "Arial",
+                "fontSize": 11
+            }
         }
-    }
-    # Columna M: Ubicación sonda google maps (texto, DMS)
-    sheet.format("M2:M", text_format)
-    # Columnas N y O: Latitud sonda y Longitud sonda (números)
-    sheet.format("N2:O", number_format)
+        # Columna M: Ubicación sonda google maps (texto, DMS)
+        sheet.format("M2:M", text_format)
+        # Columnas N y O: Latitud sonda y Longitud sonda (números)
+        sheet.format("N2:O", number_format)
+    except Exception as e:
+        st.warning(f"Error al aplicar formato: {str(e)}")
 
 def apply_format_campo(sheet):
     """Aplica formato a las celdas de la hoja de cálculo para Campo."""
-    text_format = {
-        "backgroundColor": {"red": 1, "green": 1, "blue": 1},
-        "horizontalAlignment": "CENTER",
-        "textFormat": {
-            "foregroundColor": {"red": 0, "green": 0, "blue": 0},
-            "fontFamily": "Arial",
-            "fontSize": 11
+    try:
+        text_format = {
+            "backgroundColor": {"red": 1, "green": 1, "blue": 1},
+            "horizontalAlignment": "CENTER",
+            "textFormat": {
+                "foregroundColor": {"red": 0, "green": 0, "blue": 0},
+                "fontFamily": "Arial",
+                "fontSize": 11
+            }
         }
-    }
-    number_format = {
-        "numberFormat": {
-            "type": "NUMBER",
-            "pattern": "#,##0.00000000"
-        },
-        "backgroundColor": {"red": 1, "green": 1, "blue": 1},
-        "horizontalAlignment": "CENTER",
-        "textFormat": {
-            "foregroundColor": {"red": 0, "green": 0, "blue": 0},
-            "fontFamily": "Arial",
-            "fontSize": 11
+        number_format = {
+            "numberFormat": {
+                "type": "NUMBER",
+                "pattern": "#,##0.00000000"
+            },
+            "backgroundColor": {"red": 1, "green": 1, "blue": 1},
+            "horizontalAlignment": "CENTER",
+            "textFormat": {
+                "foregroundColor": {"red": 0, "green": 0, "blue": 0},
+                "fontFamily": "Arial",
+                "fontSize": 11
+            }
         }
-    }
-    # Columna E: Ubicación campo (texto, DMS)
-    sheet.format("E2:E", text_format)
-    # Columnas F y G: Latitud campo y Longitud Campo (números)
-    sheet.format("F2:G", number_format)
+        # Columna E: Ubicación campo (texto, DMS)
+        sheet.format("E2:E", text_format)
+        # Columnas F y G: Latitud campo y Longitud Campo (números)
+        sheet.format("F2:G", number_format)
+    except Exception as e:
+        st.warning(f"Error al aplicar formato: {str(e)}")
 
 # --- 5. Función para formatear la cadena DMS ---
 def format_dms(value):
     """Formatea una cadena DMS al formato correcto."""
-    pattern = r'(\d+)[°º]\s*(\d+)[\']\s*([\d\.]+)"\s*([NS])\s+(\d+)[°º]\s*(\d+)[\']\s*([\d\.]+)"\s*([EW])'
+    if not value or not isinstance(value, str):
+        return None
+    
+    pattern = r'(\d+)[°º]\s*(\d+)[\'']\s*([\d\.]+)"\s*([NS])\s+(\d+)[°º]\s*(\d+)[\'']\s*([\d\.]+)"\s*([EW])'
     m = re.match(pattern, value.strip())
     if m:
         lat_deg, lat_min, lat_sec, lat_dir, lon_deg, lon_min, lon_sec, lon_dir = m.groups()
@@ -256,67 +322,117 @@ def format_dms(value):
 # --- 6. Actualizar el contenido de la columna DMS ---
 def update_dms_format_column_sonda(sheet):
     """Actualiza la columna DMS en la hoja de cálculo para Sondas."""
-    dms_values = sheet.col_values(13)  # Columna M
-    if len(dms_values) <= 1:
-        return
-    start_row = 2
-    end_row = len(dms_values)
-    cell_range = f"M{start_row}:M{end_row}"
-    cells = sheet.range(cell_range)
-    for i, cell in enumerate(cells):
-        original_value = dms_values[i + 1]  # omite el encabezado
-        if original_value:
-            new_val = format_dms(original_value)
-            cell.value = new_val if new_val is not None else original_value
-    sheet.update_cells(cells)
+    try:
+        dms_values = sheet.col_values(13)  # Columna M
+        if len(dms_values) <= 1:
+            st.warning("No hay datos en la columna de ubicación de sonda")
+            return
+        
+        start_row = 2
+        end_row = len(dms_values)
+        cell_range = f"M{start_row}:M{end_row}"
+        cells = sheet.range(cell_range)
+        
+        # Procesar en lotes para evitar problemas con grandes volúmenes de datos
+        BATCH_SIZE = 100
+        num_batches = (len(cells) + BATCH_SIZE - 1) // BATCH_SIZE
+        
+        for batch_idx in range(num_batches):
+            start_idx = batch_idx * BATCH_SIZE
+            end_idx = min((batch_idx + 1) * BATCH_SIZE, len(cells))
+            batch_cells = cells[start_idx:end_idx]
+            
+            for i, cell in enumerate(batch_cells):
+                idx = start_idx + i + 1  # +1 para omitir el encabezado
+                if idx < len(dms_values):
+                    original_value = dms_values[idx]
+                    if original_value:
+                        new_val = format_dms(original_value)
+                        cell.value = new_val if new_val is not None else original_value
+            
+            sheet.update_cells(batch_cells)
+    except Exception as e:
+        st.warning(f"Error al actualizar formato DMS para sondas: {str(e)}")
 
 def update_dms_format_column_campo(sheet):
     """Actualiza la columna DMS en la hoja de cálculo para Campo."""
-    dms_values = sheet.col_values(5)  # Columna E
-    if len(dms_values) <= 1:
-        return
-    start_row = 2
-    end_row = len(dms_values)
-    cell_range = f"E{start_row}:E{end_row}"
-    cells = sheet.range(cell_range)
-    for i, cell in enumerate(cells):
-        original_value = dms_values[i + 1]  # omite el encabezado
-        if original_value:
-            new_val = format_dms(original_value)
-            cell.value = new_val if new_val is not None else original_value
-    sheet.update_cells(cells)
+    try:
+        dms_values = sheet.col_values(5)  # Columna E
+        if len(dms_values) <= 1:
+            st.warning("No hay datos en la columna de ubicación de campo")
+            return
+        
+        start_row = 2
+        end_row = len(dms_values)
+        cell_range = f"E{start_row}:E{end_row}"
+        cells = sheet.range(cell_range)
+        
+        # Procesar en lotes
+        BATCH_SIZE = 100
+        num_batches = (len(cells) + BATCH_SIZE - 1) // BATCH_SIZE
+        
+        for batch_idx in range(num_batches):
+            start_idx = batch_idx * BATCH_SIZE
+            end_idx = min((batch_idx + 1) * BATCH_SIZE, len(cells))
+            batch_cells = cells[start_idx:end_idx]
+            
+            for i, cell in enumerate(batch_cells):
+                idx = start_idx + i + 1  # +1 para omitir el encabezado
+                if idx < len(dms_values):
+                    original_value = dms_values[idx]
+                    if original_value:
+                        new_val = format_dms(original_value)
+                        cell.value = new_val if new_val is not None else original_value
+            
+            sheet.update_cells(batch_cells)
+    except Exception as e:
+        st.warning(f"Error al actualizar formato DMS para campo: {str(e)}")
 
 # --- 7. Funciones de conversión ---
 def dms_to_decimal(dms_str):
     """Convierte DMS a decimal."""
-    pattern = r'(\d{2})[°º](\d{2})[\']((\d{1,2}\.\d)"([NS])\s+(\d{2})[°º](\d{2})[\']((\d{1,2}\.\d)"([EW])'
+    if not dms_str or not isinstance(dms_str, str):
+        return None
+    
+    pattern = r'(\d{1,2})[°º](\d{1,2})[\''](\d{1,2}(?:\.\d+)?)"([NS])\s+(\d{1,3})[°º](\d{1,2})[\''](\d{1,2}(?:\.\d+)?)"([EW])'
     m = re.match(pattern, dms_str.strip())
     if m:
         lat_deg, lat_min, lat_sec, lat_dir, lon_deg, lon_min, lon_sec, lon_dir = m.groups()
-        lat = int(lat_deg) + int(lat_min) / 60 + float(lat_sec) / 3600
-        lon = int(lon_deg) + int(lon_min) / 60 + float(lon_sec) / 3600
-        if lat_dir.upper() == "S":
-            lat = -lat
-        if lon_dir.upper() == "W":
-            lon = -lon
-        return lat, lon
+        try:
+            lat = int(lat_deg) + int(lat_min) / 60 + float(lat_sec) / 3600
+            lon = int(lon_deg) + int(lon_min) / 60 + float(lon_sec) / 3600
+            if lat_dir.upper() == "S":
+                lat = -lat
+            if lon_dir.upper() == "W":
+                lon = -lon
+            return lat, lon
+        except (ValueError, TypeError):
+            return None
     return None
 
 def decimal_to_dms(lat, lon):
     """Convierte decimal a DMS."""
-    lat_dir = "N" if lat >= 0 else "S"
-    abs_lat = abs(lat)
-    lat_deg = int(abs_lat)
-    lat_min = int((abs_lat - lat_deg) * 60)
-    lat_sec = (abs_lat - lat_deg - lat_min / 60) * 3600
-    lon_dir = "E" if lon >= 0 else "W"
-    abs_lon = abs(lon)
-    lon_deg = int(abs_lon)
-    lon_min = int((abs_lon - lon_deg) * 60)
-    lon_sec = (abs_lon - lon_deg - lon_min / 60) * 3600
-    dms_lat = f"{lat_deg:02d}°{lat_min:02d}'{lat_sec:04.1f}\"{lat_dir}"
-    dms_lon = f"{lon_deg:02d}°{lon_min:02d}'{lon_sec:04.1f}\"{lon_dir}"
-    return f"{dms_lat} {dms_lon}"
+    try:
+        lat = float(lat)
+        lon = float(lon)
+        
+        lat_dir = "N" if lat >= 0 else "S"
+        abs_lat = abs(lat)
+        lat_deg = int(abs_lat)
+        lat_min = int((abs_lat - lat_deg) * 60)
+        lat_sec = (abs_lat - lat_deg - lat_min / 60) * 3600
+        
+        lon_dir = "E" if lon >= 0 else "W"
+        abs_lon = abs(lon)
+        lon_deg = int(abs_lon)
+        lon_min = int((abs_lon - lon_deg) * 60)
+        lon_sec = (abs_lon - lon_deg - lon_min / 60) * 3600
+        
+        dms_lat = f"{lat_deg:02d}°{lat_min:02d}'{lat_sec:04.1f}\"{lat_dir}"
+        dms_lon = f"{lon_deg:02d}°{lon_min:02d}'{lon_sec:04.1f}\"{lon_dir}"
+        return f"{dms_lat} {dms_lon}"
+    except (ValueError, TypeError):
+        return None
 
 # --- 8. Funciones que actualizan la hoja de cálculo para la conversión de coordenadas ---
 def update_decimal_from_dms_sonda(sheet):
@@ -329,18 +445,33 @@ def update_decimal_from_dms_sonda(sheet):
         if len(dms_values) <= 1:
             st.warning("No se encontraron datos en 'Ubicación sonda google maps'.")
             return
+        
         num_rows = len(dms_values)
         lat_cells = sheet.range(f"N2:N{num_rows}")
         lon_cells = sheet.range(f"O2:O{num_rows}")
-        for i, dms in enumerate(dms_values[1:]):  # omitir encabezado
-            if dms:
-                result = dms_to_decimal(dms)
-                if result is not None:
-                    lat, lon = result
-                    lat_cells[i].value = round(lat, 8)
-                    lon_cells[i].value = round(lon, 8)
-        sheet.update_cells(lat_cells)
-        sheet.update_cells(lon_cells)
+        
+        # Procesar en lotes
+        BATCH_SIZE = 100
+        for i in range(1, num_rows, BATCH_SIZE):
+            end_idx = min(i + BATCH_SIZE, num_rows)
+            for j in range(i, end_idx):
+                idx = j - 1  # Ajustar índice para las celdas
+                dms = dms_values[j] if j < len(dms_values) else ""
+                if dms:
+                    result = dms_to_decimal(dms)
+                    if result is not None:
+                        lat, lon = result
+                        lat_cells[idx].value = round(lat, 8)
+                        lon_cells[idx].value = round(lon, 8)
+        
+            # Actualizar en lotes
+            sheet.update_cells(lat_cells[i-1:end_idx-1])
+            sheet.update_cells(lon_cells[i-1:end_idx-1])
+            
+            # Mostrar progreso
+            progress = min(end_idx / num_rows, 1.0)
+            st.progress(progress)
+        
         st.success("✅ Conversión de DMS a decimal completada.")
     except Exception as e:
         st.error(f"Error en la conversión de DMS a decimal: {str(e)}")
@@ -350,26 +481,41 @@ def update_dms_from_decimal_sonda(sheet):
     try:
         st.info("⌛ Iniciando la conversión de coordenadas de decimal a DMS para Sondas. Por favor espere...")
         apply_format_sonda(sheet)
-        update_dms_format_column_sonda(sheet)
+        
         lat_values = sheet.col_values(14)  # Columna N
         lon_values = sheet.col_values(15)  # Columna O
         if len(lat_values) <= 1 or len(lon_values) <= 1:
             st.warning("No se encontraron datos en 'Latitud sonda' o 'longitud Sonda'.")
             return
+        
         num_rows = min(len(lat_values), len(lon_values))
         dms_cells = sheet.range(f"M2:M{num_rows}")
-        for i in range(1, num_rows):
-            lat_str = lat_values[i]
-            lon_str = lon_values[i]
-            if lat_str and lon_str:
-                try:
-                    lat = float(lat_str.replace(",", "."))
-                    lon = float(lon_str.replace(",", "."))
-                    dms = decimal_to_dms(lat, lon)
-                    dms_cells[i-1].value = dms
-                except Exception:
-                    pass
-        sheet.update_cells(dms_cells)
+        
+        # Procesar en lotes
+        BATCH_SIZE = 100
+        for i in range(1, num_rows, BATCH_SIZE):
+            end_idx = min(i + BATCH_SIZE, num_rows)
+            for j in range(i, end_idx):
+                idx = j - 1  # Ajustar índice para las celdas
+                lat_str = lat_values[j] if j < len(lat_values) else ""
+                lon_str = lon_values[j] if j < len(lon_values) else ""
+                if lat_str and lon_str:
+                    try:
+                        lat = float(str(lat_str).replace(",", "."))
+                        lon = float(str(lon_str).replace(",", "."))
+                        dms = decimal_to_dms(lat, lon)
+                        if dms:
+                            dms_cells[idx].value = dms
+                    except (ValueError, TypeError):
+                        pass
+        
+            # Actualizar en lotes
+            sheet.update_cells(dms_cells[i-1:end_idx-1])
+            
+            # Mostrar progreso
+            progress = min(end_idx / num_rows, 1.0)
+            st.progress(progress)
+        
         st.success("✅ Conversión de decimal a DMS completada.")
     except Exception as e:
         st.error(f"Error en la conversión de decimal a DMS: {str(e)}")
@@ -384,18 +530,33 @@ def update_decimal_from_dms_campo(sheet):
         if len(dms_values) <= 1:
             st.warning("No se encontraron datos en 'Ubicación campo'.")
             return
+        
         num_rows = len(dms_values)
         lat_cells = sheet.range(f"F2:F{num_rows}")
         lon_cells = sheet.range(f"G2:G{num_rows}")
-        for i, dms in enumerate(dms_values[1:]):  # omitir encabezado
-            if dms:
-                result = dms_to_decimal(dms)
-                if result is not None:
-                    lat, lon = result
-                    lat_cells[i].value = round(lat, 8)
-                    lon_cells[i].value = round(lon, 8)
-        sheet.update_cells(lat_cells)
-        sheet.update_cells(lon_cells)
+        
+        # Procesar en lotes
+        BATCH_SIZE = 100
+        for i in range(1, num_rows, BATCH_SIZE):
+            end_idx = min(i + BATCH_SIZE, num_rows)
+            for j in range(i, end_idx):
+                idx = j - 1  # Ajustar índice para las celdas
+                dms = dms_values[j] if j < len(dms_values) else ""
+                if dms:
+                    result = dms_to_decimal(dms)
+                    if result is not None:
+                        lat, lon = result
+                        lat_cells[idx].value = round(lat, 8)
+                        lon_cells[idx].value = round(lon, 8)
+        
+            # Actualizar en lotes
+            sheet.update_cells(lat_cells[i-1:end_idx-1])
+            sheet.update_cells(lon_cells[i-1:end_idx-1])
+            
+            # Mostrar progreso
+            progress = min(end_idx / num_rows, 1.0)
+            st.progress(progress)
+        
         st.success("✅ Conversión de DMS a decimal completada.")
     except Exception as e:
         st.error(f"Error en la conversión de DMS a decimal: {str(e)}")
@@ -405,26 +566,41 @@ def update_dms_from_decimal_campo(sheet):
     try:
         st.info("⌛ Iniciando la conversión de coordenadas de decimal a DMS para Campo. Por favor espere...")
         apply_format_campo(sheet)
-        update_dms_format_column_campo(sheet)
+        
         lat_values = sheet.col_values(6)  # Columna F
         lon_values = sheet.col_values(7)  # Columna G
         if len(lat_values) <= 1 or len(lon_values) <= 1:
             st.warning("No se encontraron datos en 'Latitud campo' o 'Longitud Campo'.")
             return
+        
         num_rows = min(len(lat_values), len(lon_values))
         dms_cells = sheet.range(f"E2:E{num_rows}")
-        for i in range(1, num_rows):
-            lat_str = lat_values[i]
-            lon_str = lon_values[i]
-            if lat_str and lon_str:
-                try:
-                    lat = float(lat_str.replace(",", "."))
-                    lon = float(lon_str.replace(",", "."))
-                    dms = decimal_to_dms(lat, lon)
-                    dms_cells[i-1].value = dms
-                except Exception:
-                    pass
-        sheet.update_cells(dms_cells)
+        
+        # Procesar en lotes
+        BATCH_SIZE = 100
+        for i in range(1, num_rows, BATCH_SIZE):
+            end_idx = min(i + BATCH_SIZE, num_rows)
+            for j in range(i, end_idx):
+                idx = j - 1  # Ajustar índice para las celdas
+                lat_str = lat_values[j] if j < len(lat_values) else ""
+                lon_str = lon_values[j] if j < len(lon_values) else ""
+                if lat_str and lon_str:
+                    try:
+                        lat = float(str(lat_str).replace(",", "."))
+                        lon = float(str(lon_str).replace(",", "."))
+                        dms = decimal_to_dms(lat, lon)
+                        if dms:
+                            dms_cells[idx].value = dms
+                    except (ValueError, TypeError):
+                        pass
+        
+            # Actualizar en lotes
+            sheet.update_cells(dms_cells[i-1:end_idx-1])
+            
+            # Mostrar progreso
+            progress = min(end_idx / num_rows, 1.0)
+            st.progress(progress)
+        
         st.success("✅ Conversión de decimal a DMS completada.")
     except Exception as e:
         st.error(f"Error en la conversión de decimal a DMS: {str(e)}")
