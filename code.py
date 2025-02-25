@@ -235,7 +235,7 @@ def apply_format_campo(sheet):
 # --- 5. Función para formatear la cadena DMS ---
 def format_dms(value):
     """Formatea una cadena DMS al formato correcto."""
-    pattern = r'(\d+)[°º]\s*(\d+)[\'']\s*([\d\.]+)"\s*([NS])\s+(\d+)[°º]\s*(\d+)[\'']\s*([\d\.]+)"\s*([EW])'
+    pattern = r'(\d+)[°º]\s*(\d+)[\']\s*([\d\.]+)"\s*([NS])\s+(\d+)[°º]\s*(\d+)[\']\s*([\d\.]+)"\s*([EW])'
     m = re.match(pattern, value.strip())
     if m:
         lat_deg, lat_min, lat_sec, lat_dir, lon_deg, lon_min, lon_sec, lon_dir = m.groups()
